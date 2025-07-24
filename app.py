@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 
 app = Flask(__name__)
@@ -27,22 +27,38 @@ def refresh_token():
     return TOKEN_DATA["access_token"]
 
 @app.route('/events/today', methods=['GET'])
-def get_today_events():
+def get_all_events_today():
     access_token = refresh_token()
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
     start_time = tz.localize(datetime.now().replace(hour=0, minute=0, second=0)).isoformat()
     end_time = tz.localize(datetime.now().replace(hour=23, minute=59, second=59)).isoformat()
 
-    url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
-    params = {
-        "timeMin": start_time,
-        "timeMax": end_time,
-        "singleEvents": "true",
-        "orderBy": "startTime"
-    }
+    # Lấy danh sách tất cả calendar
+    calendars_url = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
     headers = {"Authorization": f"Bearer {access_token}"}
-    response = requests.get(url, headers=headers, params=params).json()
-    return jsonify(response)
+    calendars_response = requests.get(calendars_url, headers=headers).json()
+    
+    all_events = []
+    for cal in calendars_response.get("items", []):
+        cal_id = cal["id"]
+        cal_name = cal.get("summary", "Lịch không tên")
+        events_url = f"https://www.googleapis.com/calendar/v3/calendars/{cal_id}/events"
+        params = {
+            "timeMin": start_time,
+            "timeMax": end_time,
+            "singleEvents": "true",
+            "orderBy": "startTime"
+        }
+        events_response = requests.get(events_url, headers=headers, params=params).json()
+        for event in events_response.get("items", []):
+            all_events.append({
+                "calendar": cal_name,
+                "summary": event.get("summary", "Không có tiêu đề"),
+                "start": event.get("start", {}).get("dateTime", ""),
+                "end": event.get("end", {}).get("dateTime", "")
+            })
+
+    return jsonify({"events": all_events})
 
 @app.route('/events/create', methods=['POST'])
 def create_event():
