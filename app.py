@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
 app = Flask(__name__)
@@ -26,19 +26,16 @@ def refresh_token():
         TOKEN_DATA["access_token"] = response["access_token"]
     return TOKEN_DATA["access_token"]
 
-@app.route('/events/today', methods=['GET'])
-def get_all_events_today():
-    access_token = refresh_token()
-    tz = pytz.timezone("Asia/Ho_Chi_Minh")
-    start_time = tz.localize(datetime.now().replace(hour=0, minute=0, second=0)).isoformat()
-    end_time = tz.localize(datetime.now().replace(hour=23, minute=59, second=59)).isoformat()
-
-    calendars_url = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
+def get_all_calendars(access_token):
+    url = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
     headers = {"Authorization": f"Bearer {access_token}"}
-    calendars_response = requests.get(calendars_url, headers=headers).json()
-    
+    return requests.get(url, headers=headers).json().get("items", [])
+
+def fetch_events(access_token, start_time, end_time):
+    calendars = get_all_calendars(access_token)
+    headers = {"Authorization": f"Bearer {access_token}"}
     all_events = []
-    for cal in calendars_response.get("items", []):
+    for cal in calendars:
         cal_id = cal["id"]
         cal_name = cal.get("summary", "Lịch không tên")
         events_url = f"https://www.googleapis.com/calendar/v3/calendars/{cal_id}/events"
@@ -48,25 +45,66 @@ def get_all_events_today():
             "singleEvents": "true",
             "orderBy": "startTime"
         }
-        events_response = requests.get(events_url, headers=headers, params=params).json()
-        for event in events_response.get("items", []):
-            start = event.get("start", {})
-            end = event.get("end", {})
-            start_time_value = start.get("dateTime") or start.get("date") or ""
-            end_time_value = end.get("dateTime") or end.get("date") or ""
-
-            # Nếu chỉ có "date" thì là sự kiện cả ngày
-            if "date" in start:
-                start_time_value += " (Cả ngày)"
-
+        res = requests.get(events_url, headers=headers, params=params).json()
+        for event in res.get("items", []):
+            start_val = event.get("start", {}).get("dateTime") or event.get("start", {}).get("date", "")
+            end_val = event.get("end", {}).get("dateTime") or event.get("end", {}).get("date", "")
+            if "date" in event.get("start", {}):
+                start_val += " (Cả ngày)"
             all_events.append({
+                "id": event.get("id"),
+                "calendarId": cal_id,
                 "calendar": cal_name,
                 "summary": event.get("summary", "Không có tiêu đề"),
-                "start": start_time_value,
-                "end": end_time_value
+                "start": start_val,
+                "end": end_val
             })
+    return all_events
 
-    return jsonify({"events": all_events})
+@app.route('/events/today', methods=['GET'])
+def get_events_today():
+    access_token = refresh_token()
+    tz = pytz.timezone("Asia/Ho_Chi_Minh")
+    start_time = tz.localize(datetime.now().replace(hour=0, minute=0)).isoformat()
+    end_time = tz.localize(datetime.now().replace(hour=23, minute=59)).isoformat()
+    return jsonify({"events": fetch_events(access_token, start_time, end_time)})
+
+@app.route('/events/week', methods=['GET'])
+def get_events_week():
+    access_token = refresh_token()
+    tz = pytz.timezone("Asia/Ho_Chi_Minh")
+    start_time = tz.localize(datetime.now()).isoformat()
+    end_time = tz.localize(datetime.now() + timedelta(days=7)).isoformat()
+    return jsonify({"events": fetch_events(access_token, start_time, end_time)})
+
+@app.route('/events/month', methods=['GET'])
+def get_events_month():
+    access_token = refresh_token()
+    tz = pytz.timezone("Asia/Ho_Chi_Minh")
+    start_time = tz.localize(datetime.now()).isoformat()
+    end_time = tz.localize(datetime.now() + timedelta(days=30)).isoformat()
+    return jsonify({"events": fetch_events(access_token, start_time, end_time)})
+
+@app.route('/events/search', methods=['POST'])
+def search_events():
+    access_token = refresh_token()
+    keyword = request.json.get("keyword", "").lower()
+    tz = pytz.timezone("Asia/Ho_Chi_Minh")
+    start_time = tz.localize(datetime.now()).isoformat()
+    end_time = tz.localize(datetime.now() + timedelta(days=30)).isoformat()
+    events = fetch_events(access_token, start_time, end_time)
+    filtered = [e for e in events if keyword in e["summary"].lower()]
+    return jsonify({"events": filtered})
+
+@app.route('/events/delete', methods=['POST'])
+def delete_event():
+    access_token = refresh_token()
+    event_id = request.json.get("id")
+    calendar_id = request.json.get("calendarId", "primary")
+    url = f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events/{event_id}"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    response = requests.delete(url, headers=headers)
+    return jsonify({"status": "deleted" if response.status_code == 204 else "failed"})
 
 @app.route('/events/create', methods=['POST'])
 def create_event():
