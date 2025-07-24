@@ -33,7 +33,6 @@ def get_all_events_today():
     start_time = tz.localize(datetime.now().replace(hour=0, minute=0, second=0)).isoformat()
     end_time = tz.localize(datetime.now().replace(hour=23, minute=59, second=59)).isoformat()
 
-    # Lấy danh sách tất cả calendar
     calendars_url = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
     headers = {"Authorization": f"Bearer {access_token}"}
     calendars_response = requests.get(calendars_url, headers=headers).json()
@@ -51,11 +50,20 @@ def get_all_events_today():
         }
         events_response = requests.get(events_url, headers=headers, params=params).json()
         for event in events_response.get("items", []):
+            start = event.get("start", {})
+            end = event.get("end", {})
+            start_time_value = start.get("dateTime") or start.get("date") or ""
+            end_time_value = end.get("dateTime") or end.get("date") or ""
+
+            # Nếu chỉ có "date" thì là sự kiện cả ngày
+            if "date" in start:
+                start_time_value += " (Cả ngày)"
+
             all_events.append({
                 "calendar": cal_name,
                 "summary": event.get("summary", "Không có tiêu đề"),
-                "start": event.get("start", {}).get("dateTime", ""),
-                "end": event.get("end", {}).get("dateTime", "")
+                "start": start_time_value,
+                "end": end_time_value
             })
 
     return jsonify({"events": all_events})
